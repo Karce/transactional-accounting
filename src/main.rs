@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use csv::{ReaderBuilder, Trim};
+use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::io;
-use hashbrown::HashMap;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Transaction {
@@ -26,7 +26,6 @@ struct Account {
 fn main() -> Result<()> {
     //println!("Hello, world!");
     let args: Vec<String> = env::args().collect();
-    println!("{:?}", args);
     if args.len() < 2 {
         eprintln!("Please provide a CSV file to process transactions.");
     }
@@ -36,7 +35,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn process_input(csv_path: &str) -> Result<()> {
+fn process_input(csv_path: &str) -> Result<HashMap<u16, Account>> {
     let mut rdr = ReaderBuilder::new()
         .trim(Trim::All)
         .from_path(csv_path)
@@ -46,124 +45,146 @@ fn process_input(csv_path: &str) -> Result<()> {
     let mut transactions: HashMap<u32, Transaction> = HashMap::new();
 
     for result in rdr.deserialize() {
-        //println!("{:?}", result);
         // Handle errors here related to parsing this record.
         let mut transaction: Transaction = result?;
         process_transaction(&mut state, transaction, &mut transactions);
-        //println!("{:?}", transaction);
     }
 
     let mut wtr = csv::Writer::from_writer(io::stdout());
 
-    for (client, account) in &state {
+    for (_, account) in &state {
         wtr.serialize(account).unwrap();
     }
 
-    Ok(())
+    Ok(state)
 }
 
-fn process_transaction(state: &mut HashMap<u16, Account>, mut transaction: Transaction, transactions: &mut HashMap<u32, Transaction>) {
+fn process_transaction(
+    state: &mut HashMap<u16, Account>,
+    mut transaction: Transaction,
+    transactions: &mut HashMap<u32, Transaction>,
+) {
+    // This step is performed so we only use 4 digits of precision after the decimal.
+    transaction.amount = (transaction.amount * 10000.0).trunc() / 10000.0;
     match transaction.r#type.as_str() {
         "deposit" => {
             if !state.contains_key(&transaction.client) {
-                state.insert(transaction.client, Account{
-                    client: transaction.client,
-                    available: transaction.amount,
-                    held: 0.0,
-                    total: transaction.amount,
-                    locked: false,
-                });
-            }
-            else {
+                state.insert(
+                    transaction.client,
+                    Account {
+                        client: transaction.client,
+                        available: transaction.amount,
+                        held: 0.0,
+                        total: transaction.amount,
+                        locked: false,
+                    },
+                );
+            } else {
                 let existing = state.get(&transaction.client).unwrap();
-                state.insert(transaction.client, Account {
-                    client: transaction.client,
-                    available: existing.available + transaction.amount,
-                    held: existing.held,
-                    total: existing.total + transaction.amount,
-                    locked: existing.locked,
-                });
+                state.insert(
+                    transaction.client,
+                    Account {
+                        client: transaction.client,
+                        available: existing.available + transaction.amount,
+                        held: existing.held,
+                        total: existing.total + transaction.amount,
+                        locked: existing.locked,
+                    },
+                );
             }
-        },
+        }
         "withdraw" => {
             if !state.contains_key(&transaction.client) {
                 // No held account. Denied.
-            }
-            else {
+            } else {
                 let existing = state.get(&transaction.client).unwrap();
                 if existing.available < transaction.amount {
                     // Insufficient funds. Denied.
-                }
-                else {
-                    state.insert(transaction.client, Account {
-                        client: transaction.client,
-                        available: existing.available - transaction.amount,
-                        held: existing.held,
-                        total: existing.total - transaction.amount,
-                        locked: existing.locked,
-                    });
+                } else {
+                    state.insert(
+                        transaction.client,
+                        Account {
+                            client: transaction.client,
+                            available: existing.available - transaction.amount,
+                            held: existing.held,
+                            total: existing.total - transaction.amount,
+                            locked: existing.locked,
+                        },
+                    );
                 }
             }
-        },
+        }
         "dispute" => {
-            if !state.contains_key(&transaction.client) || !transactions.contains_key(&transaction.tx) {
+            if !state.contains_key(&transaction.client)
+                || !transactions.contains_key(&transaction.tx)
+            {
                 // No held account. Denied.
-            }
-            else {
+            } else {
                 let existing = state.get(&transaction.client).unwrap();
                 let old_transaction = transactions.get_mut(&transaction.tx).unwrap();
                 old_transaction.disputed = Some(true);
                 //transactions.insert(old_transaction.tx, *old_transaction);
-                state.insert(transaction.client, Account {
-                    client: transaction.client,
-                    available: existing.available - old_transaction.amount,
-                    held: existing.held + old_transaction.amount,
-                    total: existing.total,
-                    locked: existing.locked,
-                });
+                state.insert(
+                    transaction.client,
+                    Account {
+                        client: transaction.client,
+                        available: existing.available - old_transaction.amount,
+                        held: existing.held + old_transaction.amount,
+                        total: existing.total,
+                        locked: existing.locked,
+                    },
+                );
             }
-        },
+        }
         "resolve" => {
-            if !state.contains_key(&transaction.client) || !transactions.contains_key(&transaction.tx) {
+            if !state.contains_key(&transaction.client)
+                || !transactions.contains_key(&transaction.tx)
+            {
                 // No held account. Denied.
-            }
-            else {
+            } else {
                 let existing = state.get(&transaction.client).unwrap();
                 let old_transaction = transactions.get_mut(&transaction.tx).unwrap();
                 match old_transaction.disputed {
                     Some(flag) => {
                         if flag {
                             old_transaction.disputed = Some(false);
-                            state.insert(transaction.client, Account {
-                                client: transaction.client,
-                                available: existing.available + old_transaction.amount,
-                                held: existing.held - old_transaction.amount,
-                                total: existing.total,
-                                locked: existing.locked,
-                            });
+                            state.insert(
+                                transaction.client,
+                                Account {
+                                    client: transaction.client,
+                                    available: existing.available + old_transaction.amount,
+                                    held: existing.held - old_transaction.amount,
+                                    total: existing.total,
+                                    locked: existing.locked,
+                                },
+                            );
                         }
                     }
                     None => {}
                 }
             }
-        },
+        }
         "chargeback" => {
-            if !state.contains_key(&transaction.client) || !transactions.contains_key(&transaction.tx) {
+            if !state.contains_key(&transaction.client)
+                || !transactions.contains_key(&transaction.tx)
+            {
                 // No held account. Denied.
-            }
-            else {
+            } else {
                 let existing = state.get(&transaction.client).unwrap();
                 let old_transaction = transactions.get(&transaction.tx).unwrap();
                 match old_transaction.disputed {
                     Some(flag) => {
                         if flag {
-                            state.insert(transaction.client, Account {
-                                client: transaction.client,
-                                available: existing.available,
-                                held: existing.held - old_transaction.amount,
-                                total: existing.total - old_transaction.amount,
-                                locked: true,
-                            });
+                            state.insert(
+                                transaction.client,
+                                Account {
+                                    client: transaction.client,
+                                    available: existing.available,
+                                    held: existing.held - old_transaction.amount,
+                                    total: existing.total - old_transaction.amount,
+                                    locked: true,
+                                },
+                            );
                         }
                     }
                     None => {}
@@ -178,7 +199,7 @@ fn process_transaction(state: &mut HashMap<u16, Account>, mut transaction: Trans
 
 #[cfg(test)]
 mod tests {
-    use super::{Transaction, process_input};
+    use super::{process_input, Transaction};
     use rand::distributions::Alphanumeric;
     use rand::prelude::*;
 
@@ -214,10 +235,28 @@ mod tests {
     }
 
     #[test]
-    fn test_process_input() {
-        let test_file: String = create_test_input();
-        println!("{}", &test_file);
-        process_input(&test_file).unwrap();
-        assert!(false);
+    fn test_deposit_regular_accounts() {
+        let state = process_input("test_csvs/deposit1.csv").unwrap();
+        assert_eq!(state.get(&1).unwrap().available, 3.0);
+        assert_eq!(state.get(&1).unwrap().total, 3.0);
+
+        assert_eq!(state.get(&2).unwrap().available, 2.0);
+        assert_eq!(state.get(&2).unwrap().total, 2.0);
+
+        assert_eq!(state.get(&3).unwrap().available, 2.0);
+        assert_eq!(state.get(&3).unwrap().total, 2.0);
+
+        assert_eq!(state.get(&999).unwrap().available, 2.0567);
+        assert_eq!(state.get(&999).unwrap().total, 2.0567);
+    }
+
+    #[test]
+    fn test_withdraw_regular_accounts() {
+        let state = process_input("test_csvs/withdraw1.csv").unwrap();
+        assert_eq!(state.get(&1).unwrap().available, 1.5);
+        assert_eq!(state.get(&1).unwrap().total, 1.5);
+
+        assert_eq!(state.get(&2).unwrap().available, 2.0);
+        assert_eq!(state.get(&2).unwrap().total, 2.0);
     }
 }
