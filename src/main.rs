@@ -1,9 +1,9 @@
-use std::env;
-use serde::Deserialize;
 use anyhow::{Context, Result};
-use csv::{ReaderBuilder, Trim;
+use csv::{ReaderBuilder, Trim};
+use serde::{Serialize, Deserialize};
+use std::env;
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 struct Transaction {
     r#type: String,
     client: u16,
@@ -21,7 +21,8 @@ fn main() -> Result<()> {
 
     let mut rdr = ReaderBuilder::new()
         .trim(Trim::All)
-        .from_path(&args[1]).with_context(|| format!("Failed to read provided file {}", args[1]))?;
+        .from_path(&args[1])
+        .with_context(|| format!("Failed to read provided file {}", args[1]))?;
 
     for result in rdr.deserialize() {
         println!("{:?}", result);
@@ -32,15 +33,53 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 mod tests {
+    use rand::distributions::Alphanumeric;
     use rand::prelude::*;
+    use super::Transaction;
 
     fn create_test_input() -> String {
+        let mut csv_path: String = thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(10)
+            .map(char::from)
+            .collect();
+        csv_path += ".csv";
+
+        let num_lines: u16 = rand::random();
+        let mut wtr = csv::Writer::from_path(&csv_path).unwrap();
+        let t_types: Vec<&str> = vec!("deposit", "withdrawal", "dispute", "resolve", "chargeback");
+        for _i in 0..num_lines {
+            for t_type in t_types.iter() {
+                let client = random::<u16>();
+                let tx = random::<u32>();
+                let amount = random::<f32>();
+                wtr.serialize(Transaction {
+
+                    r#type: t_type.to_string(),
+                    client,
+                    tx,
+                    amount
+                })
+                /*
+                wtr.write_record(&[
+                    t_type,
+                    &client,
+                    &tx,
+                    &amount,
+                ])
+                */
+                .unwrap();
+            }
+        }
+
         return csv_path;
     }
 
     #[test]
-    fn test_parsing_input() {
-
+    fn test_process_input() {
+        println!("{}", create_test_input());
+        assert!(false);
     }
 }
