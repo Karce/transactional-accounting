@@ -113,16 +113,14 @@ fn process_transaction(
                 );
             } else {
                 let existing = state.get(&transaction.client).unwrap();
-                state.insert(
-                    transaction.client,
-                    Account {
-                        client: transaction.client,
-                        available: existing.available + transaction.amount.unwrap(),
-                        held: existing.held,
-                        total: existing.total + transaction.amount.unwrap(),
-                        locked: existing.locked,
-                    },
-                );
+                let new_account = Account {
+                    client: transaction.client,
+                    available: existing.available + transaction.amount.unwrap(),
+                    held: existing.held,
+                    total: existing.total + transaction.amount.unwrap(),
+                    locked: existing.locked,
+                };
+                state.insert(transaction.client, new_account);
             }
             transaction.disputed = Some(false);
             transactions.insert(transaction.tx, transaction);
@@ -135,16 +133,14 @@ fn process_transaction(
                 if existing.available < transaction.amount.unwrap() {
                     // Insufficient funds. Denied.
                 } else {
-                    state.insert(
-                        transaction.client,
-                        Account {
-                            client: transaction.client,
-                            available: existing.available - transaction.amount.unwrap(),
-                            held: existing.held,
-                            total: existing.total - transaction.amount.unwrap(),
-                            locked: existing.locked,
-                        },
-                    );
+                    let new_account = Account {
+                        client: transaction.client,
+                        available: existing.available - transaction.amount.unwrap(),
+                        held: existing.held,
+                        total: existing.total - transaction.amount.unwrap(),
+                        locked: existing.locked,
+                    };
+                    state.insert(transaction.client, new_account);
                 }
             }
             transaction.disputed = Some(false);
@@ -172,16 +168,14 @@ fn process_transaction(
                     //available += old_transaction.amount.unwrap();
                     //held -= old_transaction.amount.unwrap();
                 }
-                state.insert(
-                    transaction.client,
-                    Account {
-                        client: transaction.client,
-                        available,
-                        held,
-                        total: existing.total,
-                        locked: existing.locked,
-                    },
-                );
+                let new_account = Account {
+                    client: transaction.client,
+                    available,
+                    held,
+                    total: existing.total,
+                    locked: existing.locked,
+                };
+                state.insert(transaction.client, new_account);
             }
         }
         "resolve" => {
@@ -196,16 +190,14 @@ fn process_transaction(
                     Some(flag) => {
                         if flag {
                             old_transaction.disputed = Some(false);
-                            state.insert(
-                                transaction.client,
-                                Account {
-                                    client: transaction.client,
-                                    available: existing.available + old_transaction.amount.unwrap(),
-                                    held: existing.held - old_transaction.amount.unwrap(),
-                                    total: existing.total,
-                                    locked: existing.locked,
-                                },
-                            );
+                            let new_account = Account {
+                                client: transaction.client,
+                                available: existing.available + old_transaction.amount.unwrap(),
+                                held: existing.held - old_transaction.amount.unwrap(),
+                                total: existing.total,
+                                locked: existing.locked,
+                            };
+                            state.insert(transaction.client, new_account);
                         }
                     }
                     None => {}
@@ -223,16 +215,14 @@ fn process_transaction(
                 match old_transaction.disputed {
                     Some(flag) => {
                         if flag {
-                            state.insert(
-                                transaction.client,
-                                Account {
-                                    client: transaction.client,
-                                    available: existing.available,
-                                    held: existing.held - old_transaction.amount.unwrap(),
-                                    total: existing.total - old_transaction.amount.unwrap(),
-                                    locked: true,
-                                },
-                            );
+                            let new_account = Account {
+                                client: transaction.client,
+                                available: existing.available,
+                                held: existing.held - old_transaction.amount.unwrap(),
+                                total: existing.total - old_transaction.amount.unwrap(),
+                                locked: true,
+                            };
+                            state.insert(transaction.client, new_account);
                         }
                     }
                     None => {}
