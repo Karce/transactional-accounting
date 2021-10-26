@@ -1,3 +1,23 @@
+/*
+ * Copyright (C) 2021 Keaton Bruce
+ *
+ * This file is part of transactional-accounting.
+ *
+ * transactional-accounting is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * transactional-accounting is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with transactional-accounting. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
 use anyhow::{Context, Result};
 use csv::{ReaderBuilder, Trim};
 use hashbrown::HashMap;
@@ -10,7 +30,7 @@ struct Transaction {
     r#type: String,
     client: u16,
     tx: u32,
-    amount: f32,
+    amount: Option<f32>,
     disputed: Option<bool>,
 }
 
@@ -45,8 +65,13 @@ fn process_input(csv_path: &str) -> Result<HashMap<u16, Account>> {
     let mut transactions: HashMap<u32, Transaction> = HashMap::new();
 
     for result in rdr.deserialize() {
-        // Handle errors here related to parsing this record.
         let mut transaction: Transaction = result?;
+        // Handle the case of locked accounts after a chargeback.
+        if let Some(account) = state.get(&transaction.client) {
+            if account.locked {
+                continue;
+            }
+        }
         process_transaction(&mut state, transaction, &mut transactions);
     }
 
@@ -65,7 +90,9 @@ fn process_transaction(
     transactions: &mut HashMap<u32, Transaction>,
 ) {
     // This step is performed so we only use 4 digits of precision after the decimal.
-    transaction.amount = (transaction.amount * 10000.0).trunc() / 10000.0;
+    if transaction.amount.is_some() {
+        transaction.amount = Some((transaction.amount.unwrap() * 10000.0).trunc() / 10000.0);
+    }
     match transaction.r#type.as_str() {
         "deposit" => {
             if !state.contains_key(&transaction.client) {
@@ -73,9 +100,9 @@ fn process_transaction(
                     transaction.client,
                     Account {
                         client: transaction.client,
-                        available: transaction.amount,
+                        available: transaction.amount.unwrap(),
                         held: 0.0,
-                        total: transaction.amount,
+                        total: transaction.amount.unwrap(),
                         locked: false,
                     },
                 );
@@ -85,34 +112,38 @@ fn process_transaction(
                     transaction.client,
                     Account {
                         client: transaction.client,
-                        available: existing.available + transaction.amount,
+                        available: existing.available + transaction.amount.unwrap(),
                         held: existing.held,
-                        total: existing.total + transaction.amount,
+                        total: existing.total + transaction.amount.unwrap(),
                         locked: existing.locked,
                     },
                 );
             }
+            transaction.disputed = Some(false);
+            transactions.insert(transaction.tx, transaction);
         }
-        "withdraw" => {
+        "withdrawal" => {
             if !state.contains_key(&transaction.client) {
                 // No held account. Denied.
             } else {
                 let existing = state.get(&transaction.client).unwrap();
-                if existing.available < transaction.amount {
+                if existing.available < transaction.amount.unwrap() {
                     // Insufficient funds. Denied.
                 } else {
                     state.insert(
                         transaction.client,
                         Account {
                             client: transaction.client,
-                            available: existing.available - transaction.amount,
+                            available: existing.available - transaction.amount.unwrap(),
                             held: existing.held,
-                            total: existing.total - transaction.amount,
+                            total: existing.total - transaction.amount.unwrap(),
                             locked: existing.locked,
                         },
                     );
                 }
             }
+            transaction.disputed = Some(false);
+            transactions.insert(transaction.tx, transaction);
         }
         "dispute" => {
             if !state.contains_key(&transaction.client)
@@ -123,13 +154,26 @@ fn process_transaction(
                 let existing = state.get(&transaction.client).unwrap();
                 let old_transaction = transactions.get_mut(&transaction.tx).unwrap();
                 old_transaction.disputed = Some(true);
-                //transactions.insert(old_transaction.tx, *old_transaction);
+                println!("{:?}", old_transaction);
+                let mut available: f32 = existing.available;
+                let mut held: f32 = existing.held;
+                if old_transaction.r#type == "deposit" {
+                    available -= old_transaction.amount.unwrap();
+                    held += old_transaction.amount.unwrap();
+                } else if old_transaction.r#type == "withdrawal" {
+                    // I don't think it make sense to make funds available yet on
+                    // a withdrawal until it is finalized.
+                    // Do disputes apply to withdrawals?
+                    // You don't chargeback a withdrawal.
+                    //available += old_transaction.amount.unwrap();
+                    //held -= old_transaction.amount.unwrap();
+                }
                 state.insert(
                     transaction.client,
                     Account {
                         client: transaction.client,
-                        available: existing.available - old_transaction.amount,
-                        held: existing.held + old_transaction.amount,
+                        available,
+                        held,
                         total: existing.total,
                         locked: existing.locked,
                     },
@@ -152,8 +196,8 @@ fn process_transaction(
                                 transaction.client,
                                 Account {
                                     client: transaction.client,
-                                    available: existing.available + old_transaction.amount,
-                                    held: existing.held - old_transaction.amount,
+                                    available: existing.available + old_transaction.amount.unwrap(),
+                                    held: existing.held - old_transaction.amount.unwrap(),
                                     total: existing.total,
                                     locked: existing.locked,
                                 },
@@ -180,8 +224,8 @@ fn process_transaction(
                                 Account {
                                     client: transaction.client,
                                     available: existing.available,
-                                    held: existing.held - old_transaction.amount,
-                                    total: existing.total - old_transaction.amount,
+                                    held: existing.held - old_transaction.amount.unwrap(),
+                                    total: existing.total - old_transaction.amount.unwrap(),
                                     locked: true,
                                 },
                             );
@@ -193,46 +237,11 @@ fn process_transaction(
         }
         _ => {}
     }
-    transaction.disputed = Some(false);
-    transactions.insert(transaction.tx, transaction);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{process_input, Transaction};
-    use rand::distributions::Alphanumeric;
-    use rand::prelude::*;
-
-    fn create_test_input() -> String {
-        let mut csv_path: String = thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(10)
-            .map(char::from)
-            .collect();
-        csv_path.insert_str(0, "test_csvs/test-");
-        csv_path += ".csv";
-
-        let num_lines: u8 = rand::random();
-        let mut wtr = csv::Writer::from_path(&csv_path).unwrap();
-        let t_types: Vec<&str> = vec!["deposit", "withdrawal", "dispute", "resolve", "chargeback"];
-        for _i in 0..num_lines {
-            for t_type in t_types.iter() {
-                let client = thread_rng().gen_range(0..16);
-                let tx = random::<u32>();
-                let amount = random::<f32>();
-                wtr.serialize(Transaction {
-                    r#type: t_type.to_string(),
-                    client,
-                    tx,
-                    amount,
-                    disputed: None,
-                })
-                .unwrap();
-            }
-        }
-
-        return csv_path;
-    }
+    use super::process_input;
 
     #[test]
     fn test_deposit_regular_accounts() {
@@ -258,5 +267,54 @@ mod tests {
 
         assert_eq!(state.get(&2).unwrap().available, 2.0);
         assert_eq!(state.get(&2).unwrap().total, 2.0);
+
+        assert!(!state.contains_key(&3));
+    }
+
+    #[test]
+    fn test_dispute_regular_deposit() {
+        let state = process_input("test_csvs/dispute1.csv").unwrap();
+        assert_eq!(state.get(&1).unwrap().available, 1.0);
+        assert_eq!(state.get(&1).unwrap().held, 2.5);
+        assert_eq!(state.get(&1).unwrap().total, 3.5);
+        assert_eq!(state.get(&1).unwrap().locked, false);
+    }
+
+    #[test]
+    fn test_dispute_regular_withdrawal() {
+        // I'm defining withdrawals as undisputable since
+        // performing chargebacks on a withdrawal doesn't make sense.
+        let state = process_input("test_csvs/dispute2.csv").unwrap();
+        assert_eq!(state.get(&1).unwrap().available, 2.0);
+        assert_eq!(state.get(&1).unwrap().held, 0.0);
+        assert_eq!(state.get(&1).unwrap().total, 2.0);
+        assert_eq!(state.get(&1).unwrap().locked, false);
+    }
+
+    #[test]
+    fn test_resolve_regular_dispute() {
+        let state = process_input("test_csvs/resolve1.csv").unwrap();
+        assert_eq!(state.get(&1).unwrap().available, 3.5);
+        assert_eq!(state.get(&1).unwrap().held, 0.0);
+        assert_eq!(state.get(&1).unwrap().total, 3.5);
+        assert_eq!(state.get(&1).unwrap().locked, false);
+    }
+
+    #[test]
+    fn test_chargeback_regular_dispute() {
+        let state = process_input("test_csvs/chargeback1.csv").unwrap();
+        assert_eq!(state.get(&1).unwrap().available, 1.0);
+        assert_eq!(state.get(&1).unwrap().held, 0.0);
+        assert_eq!(state.get(&1).unwrap().total, 1.0);
+        assert_eq!(state.get(&1).unwrap().locked, true);
+    }
+
+    #[test]
+    fn test_chargeback_more_disputes() {
+        let state = process_input("test_csvs/chargeback2.csv").unwrap();
+        assert_eq!(state.get(&1).unwrap().available, 1.0);
+        assert_eq!(state.get(&1).unwrap().held, 0.0);
+        assert_eq!(state.get(&1).unwrap().total, 1.0);
+        assert_eq!(state.get(&1).unwrap().locked, true);
     }
 }
