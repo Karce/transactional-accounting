@@ -44,7 +44,6 @@ struct Account {
 }
 
 fn main() -> Result<()> {
-    //println!("Hello, world!");
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         eprintln!("Please provide a CSV file to process transactions.");
@@ -56,6 +55,9 @@ fn main() -> Result<()> {
 }
 
 fn process_input(csv_path: &str) -> Result<HashMap<u16, Account>> {
+    // The goal of process_input is to actually read the file from
+    // disk, process its transactions, then write the accounts to stdout.
+
     let mut rdr = ReaderBuilder::new()
         .trim(Trim::All)
         .from_path(csv_path)
@@ -65,7 +67,7 @@ fn process_input(csv_path: &str) -> Result<HashMap<u16, Account>> {
     let mut transactions: HashMap<u32, Transaction> = HashMap::new();
 
     for result in rdr.deserialize() {
-        let mut transaction: Transaction = result?;
+        let transaction: Transaction = result?;
         // Handle the case of locked accounts after a chargeback.
         if let Some(account) = state.get(&transaction.client) {
             if account.locked {
@@ -89,6 +91,9 @@ fn process_transaction(
     mut transaction: Transaction,
     transactions: &mut HashMap<u32, Transaction>,
 ) {
+    // process_transaction is used to pattern match the different
+    // types of transactions to perform specific actions for each.
+
     // This step is performed so we only use 4 digits of precision after the decimal.
     if transaction.amount.is_some() {
         transaction.amount = Some((transaction.amount.unwrap() * 10000.0).trunc() / 10000.0);
@@ -154,7 +159,6 @@ fn process_transaction(
                 let existing = state.get(&transaction.client).unwrap();
                 let old_transaction = transactions.get_mut(&transaction.tx).unwrap();
                 old_transaction.disputed = Some(true);
-                println!("{:?}", old_transaction);
                 let mut available: f32 = existing.available;
                 let mut held: f32 = existing.held;
                 if old_transaction.r#type == "deposit" {
