@@ -80,7 +80,7 @@ fn process_input(csv_path: &str) -> Result<HashMap<u16, Account>> {
     let mut wtr = csv::Writer::from_writer(io::stdout());
 
     for (_, account) in &state {
-        wtr.serialize(account).unwrap();
+        wtr.serialize(account)?;
     }
 
     Ok(state)
